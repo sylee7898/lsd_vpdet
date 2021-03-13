@@ -1,0 +1,141 @@
+config
+data
+dataset
+DCN
+(logs)
+- LSD
+misc
+neurvps
+(result)
+---
+example_lsd	:	lsd 라인 두개씩 선택해서 vp 3번 계산 (수동) > parameter
+parameter	:	lsd로 구한 vp로 param 계산 (수동)
+
+vpdetection_LSD
+lsd_ROIvpdet
+
+train
+eval
+vpdet
+test_feature_vis
+
+
+
+[calibration]
+example_lsd에서 에지 추출 후   에지 선택해서 vp계산
+parameter에서 vp로 parameter 계산 후      길이비교
+(vpdetection_LSD는 자동으로 모든에지 교차점구해서 평균인 vp구하는데 미리 Jlinkage필요
+  그리고 짧은 선들이 한라인인데 선과선사이에서 만나는 점도 많아 부정확)
+
+[neurvps]
+train시키고
+eval 에서 dataset에 valid 대해 'result/eval/각파일'에 순서대로 vpt(gt/pd)폴더생성
+dataset/my.py로 이미지위에 2D 라인 그려줌
+
+=============================
+trainer에 plot 새로 정의 > train시 resume_from에 저장 (trainer에서 viz저장폴더명 변경했음, epoch반으로 줄임)
+	train에  trainer에 [score랑 y]뭔지
+	train시 사진 10장 결과: trainer/validate함수에 index>=8 숫자 늘려주기  
+		 train 결과사진 image[0]은 뭐지?
+	
+-
+dataset에 후보 여러개면 점 여러개표시 ? 각 npz파일엔 3점만 있음
+data 사진 폴더에 train.txt, valid.txt > train 하면 train.txt 파일부터 다 처리하고 valid.txt파일은 적용해서 logs에 저장된다
+
+
+-
+Hourglass Backbone > 	./neurvps/models/hourglass_pose.py
+Conic Conv  > 		./neurvps/models/conic.py
+			이게 3.3 Conic Convoution Operators in Conic Space 과정
+
+			./neurvps/models/deformable.py
+			Deformable convolutional networks논문으로 y식 계산 
+			conic convolution : edge detection을 더 쉽고 정확하게
+			여기서 im2co_step 11로 둠 
+
+			./neurvps/models/vanihsing_net.py
+			network 구조 (conv, [bn, conv] *4 + fc*3)
+			train에서 backbone으로 hourglass 넣음
+			train,eval에서 vanishing_net import만하고 사용안함
+			test 만들어야할거같아 
+bn,conv 4번 반복은 보상한다 줄어든 spatial resolution을 보상하기 위해 각 레이어의 두개요소에 의해 채널차원이 증가됐다. 
+[v_net에서]conic_6x이면 (config에서 true,false 설정) conic conv 2번 더 
+        self.fc0 = nn.Conv2d(64, 32, 1)		> 1*1Conv
+        self.relu = nn.ReLU(inplace=True)
+        self.pool = nn.MaxPool2d(2, 2)
+
+        if M.conic_6x:
+            self.bn00 = nn.BatchNorm2d(32)	> bn, relu, conv
+            self.conv00 = ConicConv(32, 32)
+            self.bn0 = nn.BatchNorm2d(32)	> bn, relu, conv
+            self.conv0 = ConicConv(32, 32)
+
+        self.bn1 = nn.BatchNorm2d(32)		> bn, relu, conv, pool
+        self.conv1 = ConicConv(32, 64)
+        self.bn2 = nn.BatchNorm2d(64)		> bn, relu, conv, pool
+        self.conv2 = ConicConv(64, 128)
+        self.bn3 = nn.BatchNorm2d(128)		> bn, relu, conv, pool
+        self.conv3 = ConicConv(128, 256)
+        self.bn4 = nn.BatchNorm2d(256)		> bn, relu, conv, pool
+        self.conv4 = ConicConv(256, 256)
+
+        self.fc1 = nn.Linear(16384, M.fc_channel)		> relu, fc
+        self.fc2 = nn.Linear(M.fc_channel, M.fc_channel)	> relu, fc
+        self.fc3 = nn.Linear(M.fc_channel, len(M.multires))	> relu, fc
+
+        self.upsample_scale = upsample_scale
+        self.stride = output_stride / upsample_scale
+------------------
+train.py
+C.io.resume_from = outdir
+config_file = args["<yaml-config>"]
+1. dataset (C.io.datadir에서 train, valid 구분해서 load)
+	resume_form 위치에서 checkpoint 가져와 >>  config : logs에 파일명 추가
+	scannet에는 better-result.pth.tar을 checkpont_latest로 파일 복사해둠
+	su3 : config에는 우선 conic_4x로 log 설정 
+2. model (M.backbone = stacked_hourglass)
+	hg,res,fc,score,fc_,score_ 뽑지않을까
+	checkpoint 프린트했는데 / checkpoint["model_state_dict"] > model로 로드됨
+3. optimizer
+	Adam으로 최적화
+	checkpoint["optim_state_dict"] > optim로 로드됨 
+trainer 반복 : checkpoint["iteration"]
+trainer.py에서 Trainer의 train()
+-
+trainer.py plot에 랜덤컬러로 선그어주고 score,y값 입력
+		이미지 [0]으로 되어있어서 BG값인가 확인하려고 [1]로 바꿈
+datasets.py에 사진에 점찍어줌 (show안하면 점 여러개 나와)
+
+----------------
+
+########################### Data ###########################
+data/                           # default folder for placing the data
+    su3/                        # folder for SU3 dataset
+    tmm17/                      # folder for TMM17 dataset
+    scannet-vp/                 # folder for ScanNet dataset
+logs/                           # default folder for storing the output during training
+########################### Code ###########################
+config/                         # neural network hyper-parameters and configurations
+    su3.yaml                    # default parameters for SU3 dataset
+    tmm17.yaml                  # default parameters for TMM17 dataset
+    scannet.yaml                # default parameters for scannet dataset
+dataset/                        # all scripts related to data generation
+    su3.py                      # script for pre-processing the SU3 dataset to npz
+misc/                           # misc scripts that are not important
+    find-radius.py              # script for generating figure grids
+neurvps/                        # neurvps module so you can "import neurvps" in other scripts
+    models/                     # neural network architectures
+        cpp/                    # CUDA kernel for deformable convolution
+        deformable.py           # python wrapper for deformable convolution layers
+        conic.py                # conic convolution layers
+        hourglass_pose.py       # backbone network
+        vanishing_net.py        # main network
+	_init_.py
+    datasets.py                 # reading the training data
+    trainer.py                  # trainer
+    config.py                   # global variables for configuration
+    utils.py                    # misc functions
+    box.py
+    _init_.py
+train.py                        # script for training the neural network
+eval.py                         # script for evaluating a dataset from a checkpoint
